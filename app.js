@@ -277,5 +277,5 @@ $("recommendationList").onclick=e=>{let b=e.target.closest("[data-route-toggle]"
 $("exportBtn").onclick=()=>{let blob=new Blob([JSON.stringify({version:2,exportedAt:new Date().toISOString(),settings,trips},null,2)],{type:"application/json"}),u=URL.createObjectURL(blob),a=document.createElement("a");a.href=u;a.download=`commute-data-${new Date().toISOString().slice(0,10)}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)};
 $("clearDataBtn").onclick=()=>{if(confirm("确定清除所有通勤历史吗？Home / HKUST 设置会保留。")){trips=[];save(STORAGE.trips,trips);renderAll();toast("历史记录已清空")}};
 
-if("serviceWorker"in navigator)window.addEventListener("load",()=>navigator.serviceWorker.register("./sw.js").catch(()=>{}));
+if("serviceWorker"in navigator)window.addEventListener("load",async()=>{try{let r=await navigator.serviceWorker.register("./sw.js",{updateViaCache:"none"});r.update()}catch{}});
 renderAll();updateRecordRoutes();requestLocation();setTimeout(scheduleLiveRefresh,700);setInterval(()=>{updateActive();renderRecs()},60000);
