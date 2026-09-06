@@ -4,9 +4,9 @@ const ROUTES={
 toSchool:[
 {id:"diamondHillShuttle",name:"第一城 → 钻石山 → HKUST Shuttle",short:"钻石山校巴",baseline:72,penalty:0,explain:"工作日早上优先。先到钻石山，再走到 Sheung Yuen Street 搭校巴。",segments:[["Home → 第一城站",8],["港铁：第一城 → 钻石山",24],["步行至上元街校巴站",10],["等候 HKUST Shuttle",6],["校巴 → HKUST",24]]},
 {id:"diamondHill91",name:"第一城 → 钻石山 → 91",short:"钻石山 → 91",baseline:86,penalty:4,explain:"错过校巴时的稳定备选；会参考 91 实时 ETA。",segments:[["Home → 第一城站",8],["港铁：第一城 → 钻石山",24],["前往钻石山巴士总站",6],["等候 91",6],["91 → HKUST 北站",42]]},
-{id:"choiHung11",name:"第一城 → 彩虹 → 11 小巴",short:"彩虹 → 11",baseline:82,penalty:2,explain:"先到彩虹再转 11 小巴，符合你避免钻石山 91M 绕路的习惯。",segments:[["Home → 第一城站",8],["港铁：第一城 → 彩虹",22],["前往龙翔道小巴站",7],["等候 11 小巴",5],["11 小巴 → HKUST 北站",40]]},
-{id:"choiHung91M",name:"第一城 → 彩虹 → 91M",short:"彩虹 → 91M",baseline:84,penalty:2,explain:"从彩虹转车站－碧海楼上车，会与 11 小巴比较。",segments:[["Home → 第一城站",8],["港铁：第一城 → 彩虹",22],["步行至碧海楼站",8],["等候 91M",6],["91M → HKUST 北站",40]]},
-{id:"diamondHill91M",name:"第一城 → 钻石山 → 91M",short:"钻石山 → 91M",baseline:82,penalty:12,explain:"你明确不喜欢这段 91M，因此除非明显省时，否则不会优先推荐。",segments:[["Home → 第一城站",8],["港铁：第一城 → 钻石山",24],["前往钻石山巴士总站",6],["等候 91M",6],["91M → HKUST 北站",38]]}],
+{id:"choiHung11",name:"第一城 → 彩虹 → 11 小巴",short:"彩虹 → 11",baseline:62,penalty:2,explain:"先到彩虹再转 11 小巴，符合你避免钻石山 91M 绕路的习惯。",segments:[["Home → 第一城站",8],["港铁：第一城 → 彩虹",22],["前往龙翔道小巴站",7],["等候 11 小巴",5],["11 小巴 → HKUST 北站",20]]},
+{id:"choiHung91M",name:"第一城 → 彩虹 → 91M",short:"彩虹 → 91M",baseline:74,penalty:2,explain:"从彩虹转车站－碧海楼上车，会与 11 小巴比较。",segments:[["Home → 第一城站",8],["港铁：第一城 → 彩虹",22],["步行至碧海楼站",8],["等候 91M",6],["91M → HKUST 北站",30]]},
+{id:"diamondHill91M",name:"第一城 → 钻石山 → 91M",short:"钻石山 → 91M",baseline:74,penalty:12,explain:"你明确不喜欢这段 91M，因此除非明显省时，否则不会优先推荐。",segments:[["Home → 第一城站",8],["港铁：第一城 → 钻石山",24],["前往钻石山巴士总站",6],["等候 91M",6],["91M → HKUST 北站",30]]}],
 toHome:[
 {id:"returnDiamondShuttle",name:"HKUST → 钻石山 Shuttle → MTR → 第一城",short:"校巴 → 钻石山",baseline:76,penalty:0,explain:"有合适校巴时优先，下车后转港铁回第一城。",segments:[["校内步行至校巴站",7],["等候 HKUST Shuttle",7],["校巴 → 钻石山",24],["港铁：钻石山 → 第一城",25],["第一城站 → Home",13]]},
 {id:"returnCustom1015",name:"HKUST → 10:15 个人 Shuttle → 九龙塘 → MTR",short:"10:15 → 九龙塘",baseline:72,penalty:0,custom:true,explain:"这是你提供的个人规则；当前官方学生校巴网页未列出，因此默认关闭。",segments:[["校内步行至校巴站",7],["等候 10:15 Shuttle",5],["Shuttle → 九龙塘",25],["港铁：九龙塘 → 第一城",23],["第一城站 → Home",12]]},
@@ -100,7 +100,7 @@ function adjustment(route,dir,now=new Date()){
 }
 function recs(dir=currentDirection,now=new Date()){
   return ROUTES[dir].map(r=>{
-    let l=learned(r,dir,now),a=adjustment(r,dir,now),pred=l.mean+Math.min(a.p,60);
+    let l=learned(r,dir,now),a=adjustment(r,dir,now),preference=r.id==="diamondHill91M"?Number(settings.discomfort91M):(r.penalty||0),pred=l.mean+Math.min(a.p-preference,60);
     return {...r,l,pred,score:l.mean+a.p,confidence:clamp(.5+l.n*.045,.5,.93),liveReason:a.reason}
   }).filter(r=>r.score<300).sort((a,b)=>a.score-b.score);
 }
