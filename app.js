@@ -19,7 +19,7 @@ const $=id=>document.getElementById(id);
 const load=(k,f)=>{try{return JSON.parse(localStorage.getItem(k))??structuredClone(f)}catch{return structuredClone(f)}};
 const save=(k,v)=>localStorage.setItem(k,JSON.stringify(v));
 let settings=load(STORAGE.settings,defaults),trips=load(STORAGE.trips,[]),active=load(STORAGE.active,null);
-let currentDirection="toSchool",currentLocation=null,expandedRouteId=null,refreshTimer=null,directionManuallySet=false;
+let currentDirection="toSchool",currentLocation=null,expandedRouteId=null,refreshTimer=null,locationWatchdog=null,directionManuallySet=false;
 let live={kmb:{},gmb:{},updated:null};
 
 // “彩虹”是位置；91M 去科大的实际候车站是碧海楼 (WT340)。
@@ -164,13 +164,24 @@ function inferDirection(){
   if(settings.school&&hav(here,settings.school)<=settings.schoolRadius){setDirection("toHome",false);$("locationLabel").textContent="你在 HKUST 附近";return}
   setDirection(new Date().getHours()<13?"toSchool":"toHome",false);$("locationLabel").textContent="你在通勤区域 · 暂结合时间判断";
 }
-function requestLocation(){
-  if(!navigator.geolocation){inferDirection();return}
+function locationProblem(error){
+  clearTimeout(locationWatchdog);inferDirection();
+  let denied=error?.code===1,unavailable=error?.code===2;
+  $("gpsText").textContent=denied?"已拒绝":unavailable?"不可用":"超时";
+  $("locationLabel").textContent=denied?"Safari 未允许定位 · 请点下方重试":unavailable?"系统暂时无法取得位置":"定位请求超时 · 请点下方重试";
+  $("locationRetryBtn").hidden=false;$("locationRetryBtn").disabled=false;$("locationRetryBtn").textContent="使用我的位置";
+}
+function requestLocation(userInitiated=false){
+  if(!navigator.geolocation){locationProblem({code:2});return}
+  if(!window.isSecureContext){locationProblem({code:2});$("locationLabel").textContent="定位需要 HTTPS 网站";return}
+  clearTimeout(locationWatchdog);$("locationRetryBtn").disabled=true;
+  if(userInitiated){$("locationRetryBtn").hidden=false;$("locationRetryBtn").textContent="正在请求定位…";$("locationLabel").textContent="请在 Safari 弹窗中选择允许"}
+  locationWatchdog=setTimeout(()=>locationProblem({code:3}),10000);
   navigator.geolocation.getCurrentPosition(p=>{
+    clearTimeout(locationWatchdog);
     currentLocation={latitude:p.coords.latitude,longitude:p.coords.longitude,accuracy:p.coords.accuracy};
-    $("gpsDot").classList.add("on");$("gpsText").textContent=`±${Math.round(p.coords.accuracy)}m`;inferDirection();updatePlaceStatus();scheduleLiveRefresh();
-  },()=>{$("gpsText").textContent="未授权";$("locationLabel").textContent="允许定位后可自动判断方向";inferDirection()},
-  {enableHighAccuracy:true,timeout:8000,maximumAge:30000});
+    $("gpsDot").classList.add("on");$("gpsText").textContent=`±${Math.round(p.coords.accuracy)}m`;$("locationRetryBtn").hidden=true;inferDirection();updatePlaceStatus();scheduleLiveRefresh();
+  },locationProblem,{enableHighAccuracy:true,timeout:8000,maximumAge:30000});
 }
 function updateRecordRoutes(){
   let d=$("recordDirection").value||currentDirection;
@@ -270,6 +281,7 @@ document.querySelectorAll(".tag").forEach(b=>b.onclick=()=>{$("recordNote").valu
 $("settingsBtn").onclick=openSettings;$("navSettings").onclick=openSettings;$("historyBtn").onclick=openHistory;$("navHistory").onclick=openHistory;
 $("manualRecordBtn").onclick=()=>openRecord(false);$("navRecord").onclick=()=>openRecord(false);$("startCommuteBtn").onclick=toggleActive;$("recordDirection").onchange=updateRecordRoutes;$("saveRecordBtn").onclick=saveRecord;$("refreshBtn").onclick=refreshLive;
 $("setHomeBtn").onclick=()=>savePlace("home");$("setSchoolBtn").onclick=()=>savePlace("school");
+$("locationRetryBtn").onclick=()=>requestLocation(true);
 $("penaltyRange").oninput=e=>{$("penaltyValue").textContent=e.target.value;settings.discomfort91M=Number(e.target.value);save(STORAGE.settings,settings);renderRecs()};
 $("custom1015Toggle").onchange=e=>{settings.custom1015=e.target.checked;save(STORAGE.settings,settings);updateRecordRoutes();renderRecs()};
 $("historyList").onclick=e=>{let id=e.target.dataset.delete;if(!id)return;trips=trips.filter(t=>t.id!==id);save(STORAGE.trips,trips);renderHistory();renderAll();toast("已删除")};
