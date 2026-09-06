@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0f14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Commute">
+<title>Commute Predictor</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./icon-180.png">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<div class="app-shell">
+<header class="topbar">
+  <div><p class="eyebrow">PERSONAL COMMUTE</p><h1>Commute Predictor</h1></div>
+  <button id="settingsBtn" class="icon-btn" aria-label="设置">⚙︎</button>
+</header>
+<main>
+<section class="hero-card">
+  <div class="hero-row">
+    <div><p id="locationLabel" class="muted">正在判断你的位置…</p><h2 id="directionTitle">去 HKUST</h2></div>
+    <div class="status-dot-wrap"><span id="gpsDot" class="status-dot"></span><span id="gpsText">GPS</span></div>
+  </div>
+  <div class="segmented">
+    <button class="seg-btn active" data-direction="toSchool">去学校</button>
+    <button class="seg-btn" data-direction="toHome">回家</button>
+  </div>
+  <div class="arrival-wrap">
+    <p class="muted">现在出发，预计</p>
+    <div class="arrival-line"><span id="arrivalTime" class="arrival-time">--:--</span><span id="arrivalRange" class="arrival-range">正在计算</span></div>
+  </div>
+  <button id="startCommuteBtn" class="primary-btn">开始这次通勤</button>
+</section>
+
+<section class="section">
+  <div class="section-heading"><div><p class="eyebrow">BEST ROUTE</p><h3>现在怎么走</h3></div><button id="refreshBtn" class="text-btn">刷新</button></div>
+  <div id="recommendationList" class="route-list"></div>
+</section>
+
+<section class="section">
+  <div class="section-heading"><div><p class="eyebrow">LIVE</p><h3>实时交通</h3></div><span id="liveUpdated" class="muted small">尚未读取</span></div>
+  <div id="liveTransit" class="live-grid"></div>
+</section>
+
+<section class="section">
+  <div class="section-heading"><div><p class="eyebrow">LEARNING</p><h3>它在怎样学你</h3></div><button id="historyBtn" class="text-btn">历史</button></div>
+  <div class="learning-card">
+    <div class="learning-stat"><span id="tripCount" class="stat-number">0</span><span class="muted">次记录</span></div>
+    <div class="learning-stat"><span id="bestLearnedRoute" class="stat-number compact">—</span><span class="muted">最熟悉路线</span></div>
+    <p id="learningSummary" class="muted learning-copy">完成几次通勤后，网站会逐渐使用你的真实耗时修正 ETA。</p>
+    <button id="manualRecordBtn" class="secondary-btn">+ 手动记录一次通勤</button>
+  </div>
+</section>
+
+<section class="section">
+<details class="details-card">
+<summary>目前的路线偏好</summary>
+<div class="details-content">
+<p>• 工作日早上优先考虑钻石山 → HKUST 校巴。</p>
+<p>• 不喜欢从钻石山直接坐 91M，因此这条方案有额外“不舒适惩罚”。</p>
+<p>• 到彩虹以后才正常考虑 91M，并与 11 小巴比较。</p>
+<p>• 回程优先比较校巴与 91 / 91M → 牛池湾 / 彩虹 → MTR。</p>
+</div>
+</details>
+</section>
+</main>
+
+<nav class="bottom-nav">
+<button class="nav-btn active"><span>⌂</span><small>首页</small></button>
+<button class="nav-btn" id="navRecord"><span>＋</span><small>记录</small></button>
+<button class="nav-btn" id="navHistory"><span>◷</span><small>历史</small></button>
+<button class="nav-btn" id="navSettings"><span>⚙︎</span><small>设置</small></button>
+</nav>
+</div>
+
+<dialog id="recordDialog" class="sheet-dialog">
+<div class="sheet">
+<div class="sheet-handle"></div>
+<div class="sheet-head"><h3 id="recordTitle">记录这次通勤</h3><button class="close-btn" data-close="recordDialog">×</button></div>
+<label class="field"><span>方向</span><select id="recordDirection"><option value="toSchool">去 HKUST</option><option value="toHome">回第一城</option></select></label>
+<label class="field"><span>路线</span><select id="recordRoute"></select></label>
+<label class="field"><span>实际总耗时（分钟）</span><input id="recordDuration" inputmode="decimal" type="number" min="1" max="240" step="1" placeholder="例如 68"></label>
+<label class="field"><span>今天发生了什么（可选）</span><textarea id="recordNote" rows="3" placeholder="例如：等地铁 5 分钟；校巴迟开；91 很塞"></textarea></label>
+<div class="quick-tags">
+<button type="button" class="tag" data-note="等车久">等车久</button>
+<button type="button" class="tag" data-note="塞车">塞车</button>
+<button type="button" class="tag" data-note="走路慢">走路慢</button>
+<button type="button" class="tag" data-note="校巴迟开">校巴迟开</button>
+<button type="button" class="tag" data-note="很顺">很顺</button>
+</div>
+<button id="saveRecordBtn" type="button" class="primary-btn">保存并让模型学习</button>
+</div>
+</dialog>
+
+<dialog id="settingsDialog" class="sheet-dialog">
+<div class="sheet">
+<div class="sheet-handle"></div>
+<div class="sheet-head"><h3>设置</h3><button class="close-btn" data-close="settingsDialog">×</button></div>
+<div class="settings-group">
+<h4>位置</h4>
+<p class="muted small">Home 坐标不会写在源码里；请你到家后点击一次保存。</p>
+<button id="setHomeBtn" class="secondary-btn">把当前位置设为 Home</button>
+<button id="setSchoolBtn" class="secondary-btn">把当前位置设为 HKUST</button>
+<p id="placeStatus" class="muted small"></p>
+</div>
+<div class="settings-group">
+<h4>个人偏好</h4>
+<label class="range-row"><span>钻石山直接坐 91M 的不舒适惩罚</span><strong><span id="penaltyValue">12</span> 分钟</strong></label>
+<input id="penaltyRange" type="range" min="0" max="30" step="1" value="12">
+</div>
+<div class="settings-group">
+<h4>你的 10:15 → 九龙塘规则</h4>
+<label class="toggle-row"><span><strong>启用个人 10:15 Shuttle 规则</strong><small>当前 HKUST 官方学生校巴网页没有列出这一班，所以默认只作为个人规则。</small></span><input id="custom1015Toggle" type="checkbox"></label>
+</div>
+<div class="settings-group">
+<h4>数据</h4>
+<button id="exportBtn" class="secondary-btn">导出我的通勤数据</button>
+<button id="clearDataBtn" class="danger-btn">清除所有本地记录</button>
+</div>
+</div>
+</dialog>
+
+<dialog id="historyDialog" class="sheet-dialog">
+<div class="sheet tall">
+<div class="sheet-handle"></div>
+<div class="sheet-head"><h3>历史通勤</h3><button class="close-btn" data-close="historyDialog">×</button></div>
+<div id="historyList" class="history-list"></div>
+</div>
+</dialog>
+
+<div id="toast" class="toast"></div>
+<script src="./app.js" type="module"></script>
+</body>
+</html>

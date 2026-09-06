@@ -1,0 +1,23 @@
+{
+  "name": "Commute Predictor",
+  "short_name": "Commute",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#080b0f",
+  "theme_color": "#0b0f14",
+  "description": "Personalized commute ETA for City One ↔ HKUST.",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
+}
