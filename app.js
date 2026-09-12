@@ -291,3 +291,136 @@ $("clearDataBtn").onclick=()=>{if(confirm("确定清除所有通勤历史吗？H
 
 if("serviceWorker"in navigator)window.addEventListener("load",async()=>{try{let r=await navigator.serviceWorker.register("./sw.js",{updateViaCache:"none"});r.update()}catch{}});
 renderAll();updateRecordRoutes();requestLocation();setTimeout(scheduleLiveRefresh,700);setInterval(()=>{updateActive();renderRecs()},60000);
+
+// Segment recorder v3. Legacy total-only history is retained without fabricated segments.
+(() => {
+  const KEY='commute_segment_state_v3';
+  const types={walk:'步行',wait:'等车',mtr:'地铁',bus:'巴士',minibus:'小巴',shuttle:'校巴',transfer:'换乘'};
+  const S=(type,service,from,to,minutes)=>({id:[type,service,from,to].join('|'),type,service,from,to,label:from+' → '+to,baselineMinutes:minutes});
+  const W=(service,at,m)=>S('wait',service,at,'等候 '+service,m);
+  const walkOut=S('walk','walking','Home','第一城站',8);
+  const railOut=[walkOut,W('屯马线','第一城站',3),S('mtr','屯马线','第一城','钻石山',21)];
+  const railChoi=[...railOut.slice(0,2),railOut[2],S('transfer','MTR','钻石山屯马线','观塘线月台',2),W('观塘线','钻石山站',2),S('mtr','观塘线','钻石山','彩虹',3)];
+  // Baselines remain provisional estimates; stop-specific observations replace them gradually.
+  const plans={
+    diamondHillShuttle:[...railOut,S('transfer','walking','钻石山月台','上元街校巴站',10),W('HKUST Shuttle','上元街校巴站',6),S('shuttle','HKUST Shuttle','钻石山','HKUST',24)],
+    diamondHill91:[...railOut,S('transfer','walking','钻石山月台','钻石山巴士总站',6),W('91','钻石山巴士总站',6),S('bus','91','钻石山','HKUST 北站',42)],
+    diamondHill91M:[...railOut,S('transfer','walking','钻石山月台','钻石山巴士总站',6),W('91M','钻石山巴士总站',6),S('bus','91M','钻石山','HKUST 北站',30)],
+    choiHung11:[...railChoi,S('transfer','walking','彩虹月台','龙翔道小巴站',7),W('11','龙翔道小巴站',5),S('minibus','11','彩虹','HKUST 北站',20)],
+    choiHung91M:[...railChoi,S('transfer','walking','彩虹月台','碧海楼站',8),W('91M','碧海楼站',6),S('bus','91M','彩虹','HKUST 北站',30)]
+  };
+  const returnRail=(station)=>station==='钻石山'?[S('transfer','walking','钻石山校巴下车处','钻石山月台',4),W('屯马线','钻石山站',3),S('mtr','屯马线','钻石山','第一城',21)]:station==='九龙塘'?[S('transfer','walking','九龙塘校巴下车处','九龙塘月台',4),W('东铁线','九龙塘站',3),S('mtr','东铁线','九龙塘','大围',6),S('transfer','MTR','大围东铁线','屯马线月台',3),W('屯马线','大围站',3),S('mtr','屯马线','大围','第一城',8)]:[S('transfer','walking','牛池湾 / 彩虹巴士站','彩虹月台',6),W('观塘线','彩虹站',3),S('mtr','观塘线','彩虹','钻石山',3),S('transfer','MTR','钻石山观塘线','屯马线月台',3),W('屯马线','钻石山站',3),S('mtr','屯马线','钻石山','第一城',21)];
+  const homeWalk=S('walk','walking','第一城站','Home',10);
+  plans.returnDiamondShuttle=[S('walk','walking','HKUST','HKUST 校巴站',7),W('HKUST Shuttle','HKUST 校巴站',7),S('shuttle','HKUST Shuttle','HKUST','钻石山',24),...returnRail('钻石山'),homeWalk];
+  plans.returnCustom1015=[S('walk','walking','HKUST','HKUST 个人校巴站',7),W('个人 10:15 Shuttle','HKUST 个人校巴站',5),S('shuttle','个人 10:15 Shuttle','HKUST','九龙塘',25),...returnRail('九龙塘'),homeWalk];
+  const oldBus=ROUTES.toHome.find(r=>r.id==='returnBus');
+  oldBus.legacyOnly=true;
+  ['91','91M'].forEach(service=>{
+    const id='returnBus'+service;
+    ROUTES.toHome.push({...oldBus,legacyOnly:false,id,name:'HKUST → '+service+' → 彩虹 → 第一城',short:service+' → MTR'});
+    plans[id]=[S('walk','walking','HKUST','HKUST 南站',7),W(service,'HKUST 南站',7),S('bus',service,'HKUST 南站','牛池湾 / 彩虹',40),...returnRail('彩虹'),homeWalk];
+  });
+  let state=load(KEY,null),selected=null,stats={exact:{},service:{},type:{},context:{},pace:null};
+  if(!state){state={version:3,revision:0,trips:Array.isArray(trips)?trips:[],active:active||null,distances:{}};try{save(KEY,state)}catch{toast('储存不可用；请先允许浏览器储存')}}
+  trips=state.trips; active=state.active;
+  function persist(next){
+    try{
+      const disk=load(KEY,null);
+      if(disk&&disk.revision!==state.revision){state=disk;trips=state.trips;active=state.active;rebuild();renderAll();draw();toast('另一页面已更新，请重试');return false}
+      next={...next,revision:state.revision+1};save(KEY,next);state=next;trips=state.trips;active=state.active;return true;
+    }catch{toast('保存失败，记录仍保留在此页面。请检查储存空间');return false}
+  }
+  const clock=ms=>{let s=Math.floor(Math.max(0,ms)/1000);return String(Math.floor(s/3600)).padStart(2,'0')+':'+String(Math.floor(s/60)%60).padStart(2,'0')+':'+String(s%60).padStart(2,'0')};
+  const bucket=timestamp=>{const p=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Hong_Kong',weekday:'short',hour:'2-digit',hourCycle:'h23'}).formatToParts(new Date(timestamp));return (['Sat','Sun'].includes(p.find(x=>x.type==='weekday').value)?'we':'wd')+'|'+Math.floor(Number(p.find(x=>x.type==='hour').value)/2)};
+  function add(map,key,value){const a=map[key];map[key]=a?{n:a.n+1,mean:a.mean*.76+value*.24,min:Math.min(a.min,value),max:Math.max(a.max,value)}:{n:1,mean:value,min:value,max:value}}
+  function rebuild(){
+    stats={exact:{},service:{},type:{},context:{},pace:null};const pace={};
+    [...trips].sort((a,b)=>a.timestamp-b.timestamp).forEach(t=>{
+      if(t.schemaVersion!==3||t.status!=='completed'||t.excludeLearning)return;
+      (t.segments||[]).forEach(s=>{
+        const m=s.durationMs/60000;if(!Number.isFinite(m)||m<0||!Number.isFinite(s.startedAt))return;
+        add(stats.exact,s.id,m);add(stats.service,[s.type,s.service,t.direction,s.from,s.to].join('|'),m);add(stats.type,s.type,m);
+        add(stats.context,s.id+'|'+bucket(s.startedAt),m);
+        if(s.type==='walk'&&s.distanceMeters>0&&m>0){const rate=m/(s.distanceMeters/1000);if(rate>=3&&rate<=60)add(pace,'walking',rate)}
+      });
+    });stats.pace=pace.walking||null;
+  }
+  function prediction(s,dir,at){
+    let base=s.baselineMinutes;const distance=state.distances[s.id];
+    if(s.type==='walk'&&distance>0&&stats.pace){const w=Math.min(.7,stats.pace.n/(stats.pace.n+5));base=base*(1-w)+stats.pace.mean*distance/1000*w}
+    const a=stats.exact[s.id]||stats.service[[s.type,s.service,dir,s.from,s.to].join('|')];
+    if(!a)return {minutes:base,n:0};
+    const c=stats.context[s.id+'|'+bucket(at)],personal=(c && c.n>=3) ? 0.68*c.mean+0.32*a.mean : a.mean,w=Math.min(.9,a.n/(a.n+5));
+    return {minutes:base*(1-w)+personal*w,n:a.n};
+  }
+  function estimate(route,dir,at=Date.now()){
+    let elapsed=0;const rows=(plans[route.id]||[]).map(s=>{const p=prediction(s,dir,at+elapsed*60000);elapsed+=p.minutes;return {...s,predictedMinutes:p.minutes,n:p.n,distanceMeters:state.distances[s.id]||null}});
+    return {rows,total:elapsed};
+  }
+  recs=(dir=currentDirection,now=new Date())=>ROUTES[dir].filter(r=>!r.legacyOnly&&(!r.custom||settings.custom1015)).map(r=>{
+    const e=estimate(r,dir,now.getTime()),a=adjustment(r,dir,now),penalty=r.id==='diamondHill91M'?Number(settings.discomfort91M):r.penalty||0;
+    return {...r,pred:e.total,score:e.total+penalty+(a.p>=70?70:0),rows:e.rows,liveReason:a.reason,l:{n:e.rows.filter(s=>s.n).length}};
+  }).sort((a,b)=>a.score-b.score);
+  const style=document.createElement('style');style.textContent='.seg-panel{margin:18px 0;padding:20px;border:1px solid #385266;border-radius:20px;background:#10232d;color:#eef6fb}.seg-panel button,.seg-pick{min-height:48px;border-radius:12px;padding:12px 16px;cursor:pointer}.seg-panel select,.seg-panel input,.seg-panel textarea{font:inherit;background:#18313e;color:#fff;border:1px solid #69838f;border-radius:10px;padding:12px;max-width:100%;box-sizing:border-box}.seg-panel select,.seg-panel textarea{width:100%}.seg-panel label{display:block;margin:12px 0}.seg-primary,.seg-pick{background:#9fe8d1;color:#10232d;font-weight:700;border:0}.seg-secondary{background:transparent;color:#eef6fb;border:1px solid #78949f}.seg-clock{font-size:clamp(34px,10vw,56px);font-variant-numeric:tabular-nums;font-weight:750;margin:12px 0}.seg-row{display:flex;gap:12px;justify-content:space-between;padding:12px 0;border-bottom:1px solid #ffffff18;align-items:center}.seg-row strong{white-space:nowrap}.seg-panel progress{width:100%;height:12px;accent-color:#9fe8d1}.seg-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}.seg-actions button:first-child{flex:1}.seg-muted{color:#b1c7d2;font-size:14px;line-height:1.6}.seg-now{border-left:3px solid #9fe8d1;padding-left:10px}.seg-panel h2{font-size:22px}.seg-panel input[type=number]{width:110px}.seg-panel input[type=checkbox]{width:20px;height:20px}';document.head.append(style);
+  const panel=document.createElement('section');panel.id='segmentRecorder';panel.className='seg-panel';$('recommendationList').before(panel);
+  function rowsHTML(rows){return rows.map((s,i)=>'<div class="seg-row"><span>'+ (i+1)+'. '+types[s.type]+' · '+esc(s.label)+'</span><strong>'+ (s.durationMs!==undefined?clock(s.durationMs):s.predictedMinutes.toFixed(1)+' 分')+'</strong></div>').join('')}
+  function summaryHTML(t){return '<h2>行程总结</h2><p>'+esc(t.routeName||routeById(t.routeId)?.name||t.routeId)+'</p><div class="seg-clock">'+clock(t.endedAt-t.startedAt)+'</div><p class="seg-muted">出发时预计 '+t.predictedMinutes.toFixed(1)+' 分钟 · 实际 '+((t.endedAt-t.startedAt)/60000).toFixed(1)+' 分钟</p>'+rowsHTML(t.segments)}
+  function draw(){
+    if(active?.schemaVersion===3){
+      if(active.status==='review'){
+        panel.innerHTML=summaryHTML(active)+'<label>备注<textarea id="segmentNote" placeholder="例如：等车久、忘记切换分段"></textarea></label><label><input type="checkbox" id="segmentExclude" '+(active.segments.some(s=>s.durationMs<2000)?'checked':'')+'> 测试 / 计时不准：保存但不用于学习</label><button class="seg-primary" id="segmentSave">保存本次行程</button><p class="seg-muted">请检查每段时间。忘记切换时勾选上方选项，避免影响预测。</p>';
+        $('segmentSave').onclick=finishSave;return;
+      }
+      const i=active.segments.length,s=active.plan[i];
+      panel.innerHTML='<p class="seg-muted">正在记录 · '+esc(active.routeName)+'</p><progress value="'+i+'" max="'+active.plan.length+'" aria-label="已完成分段"></progress><p>第 '+(i+1)+' / '+active.plan.length+' 段 · '+types[s.type]+'</p><h2 tabindex="-1" id="segmentHeading">'+esc(s.label)+'</h2><div class="seg-clock" id="segmentElapsed"></div><p id="tripElapsed" class="seg-muted"></p><p>下一段：'+(active.plan[i+1]?types[active.plan[i+1].type]+' · '+esc(active.plan[i+1].label):'到达目的地')+'</p><div class="seg-actions"><button class="seg-primary" id="segmentNext">'+(i===active.plan.length-1?'完成行程，查看总结':'下一段 →')+'</button>'+(i?'<button class="seg-secondary" id="segmentUndo">撤销上次切换</button>':'')+'<button class="seg-secondary" id="segmentCancel">中止行程</button></div><p class="seg-muted">到站点一下进入等车，上车再点一下进入乘车。锁屏或刷新后可继续，计时不会暂停。</p><details><summary>已完成 '+i+' 段</summary>'+rowsHTML(active.segments)+'</details>';
+      $('segmentNext').onclick=advance;$('segmentCancel').onclick=cancel;if($('segmentUndo'))$('segmentUndo').onclick=undo;tick();return;
+    }
+    if(active){panel.innerHTML='<h2>有一趟旧版行程正在计时</h2><p>先通过上方结束按钮保存旧行程，之后即可开始分段记录。</p>';return}
+    const route=ROUTES[currentDirection].find(r=>r.id===selected&&!r.legacyOnly&&(!r.custom||settings.custom1015));if(!route)selected=null;
+    panel.innerHTML='<p class="seg-muted">分段通勤 · 先选路线，再出发</p><h2>今天怎么走？</h2><label for="segmentRoute">选择通勤路线</label><select id="segmentRoute"><option value="">请选择路线</option>'+recs().map(r=>'<option value="'+r.id+'" '+(selected===r.id?'selected':'')+'>'+esc(r.name)+'</option>').join('')+'</select>'+(route?'<p>分段预计合计 <strong>'+estimate(route,currentDirection).total.toFixed(1)+' 分钟</strong></p>'+rowsHTML(estimate(route,currentDirection).rows)+'<details><summary>步行距离（可选，用于学习步速）</summary><p class="seg-muted">填写已知的实际步行距离；留空也能学习该段用时。</p>'+plans[route.id].filter(s=>s.type==='walk').map(s=>'<label>'+esc(s.label)+' <input type="number" min="1" max="20000" step="1" data-distance="'+esc(s.id)+'" value="'+(state.distances[s.id]||'')+'" aria-label="'+esc(s.label)+' 距离"> 米</label>').join('')+'</details><div class="seg-actions"><button id="segmentStart" class="seg-primary">开始所选路线</button></div>':'<p class="seg-muted">每次切换时只需点「下一段」。等车、乘车和换乘会分别学习。</p>')+'<details style="margin-top:18px"><summary>我的分段学习数据</summary>'+statsHTML()+'</details>';
+    $('segmentRoute').onchange=e=>{selected=e.target.value;draw()};if($('segmentStart'))$('segmentStart').onclick=start;
+  }
+  function statsHTML(){const entries=Object.entries(stats.type);return '<p class="seg-muted">'+(stats.pace?'个人步速约 '+(60/stats.pace.mean).toFixed(1)+' km/h，配速 '+stats.pace.mean.toFixed(1)+' 分/公里（'+stats.pace.n+' 段）':'输入步行距离并完成真实记录后显示步速。')+'</p>'+entries.map(([k,a])=>'<p>'+types[k]+'：'+a.n+' 段，近期均值 '+a.mean.toFixed(1)+' 分</p>').join('')+'<p class="seg-muted">分类均值仅供查看。预测按交通线路和起终点分别学习，不把不同长度的巴士行程直接平均。</p>'+Object.entries(stats.exact).map(([id,a])=>'<p class="seg-muted">'+esc(id.split('|').slice(1).join(' · '))+'：'+a.mean.toFixed(1)+' 分 / '+a.n+' 次</p>').join('')}
+  function start(){
+    if(active||!selected)return;let distances={...state.distances};
+    for(const el of panel.querySelectorAll('[data-distance]')){let v=el.value.trim(),n=Number(v);if(v&&(!Number.isFinite(n)||n<1||n>20000)){toast('步行距离请填 1–20000 米，或留空');return}if(v)distances[el.dataset.distance]=n;else delete distances[el.dataset.distance]}
+    if(!persist({...state,distances}))return;
+    const r=routeById(selected),now=Date.now(),e=estimate(r,currentDirection,now);
+    const a={schemaVersion:3,id:crypto.randomUUID(),status:'recording',routeId:r.id,routeName:r.name,direction:currentDirection,startedAt:now,segmentStartedAt:now,plan:e.rows,segments:[],predictedMinutes:e.total};
+    if(persist({...state,active:a})){draw();updateActive();$('segmentHeading')?.focus();toast('第 1 段计时已开始')}
+  }
+  function advance(){
+    if(!active||active.status!=='recording')return;
+    const now=Date.now();if(now-active.segmentStartedAt<1000){toast('请勿重复点击，当前分段刚开始');return}
+    const a=structuredClone(active),s=a.plan[a.segments.length];a.segments.push({...s,startedAt:a.segmentStartedAt,endedAt:now,durationMs:now-a.segmentStartedAt});a.segmentStartedAt=now;
+    if(a.segments.length===a.plan.length){a.status='review';a.endedAt=now}
+    if(persist({...state,active:a})){draw();updateActive();$('segmentHeading')?.focus()}
+  }
+  function undo(){if(!active?.segments.length)return;const a=structuredClone(active),last=a.segments.pop();a.segmentStartedAt=last.startedAt;if(persist({...state,active:a}))draw()}
+  function cancel(){if(!confirm('中止并保留未完成记录？这趟不会用于学习。'))return;const now=Date.now(),a={...active,status:'cancelled',timestamp:active.startedAt,endedAt:now,duration:(now-active.startedAt)/60000,excludeLearning:true};if(persist({...state,active:null,trips:[a,...trips]})){rebuild();renderAll();draw()}}
+  function finishSave(){if(active?.status!=='review')return;const a={...active,status:'completed',timestamp:active.startedAt,duration:(active.endedAt-active.startedAt)/60000,note:$('segmentNote').value.trim(),excludeLearning:$('segmentExclude').checked,contextKey:contextKey(active.routeId,active.direction,new Date(active.startedAt))};delete a.plan;
+    if(persist({...state,active:null,trips:[a,...trips.filter(t=>t.id!==a.id)]})){rebuild();renderAll();panel.innerHTML=summaryHTML(a)+'<p>✓ 已保存'+(a.excludeLearning?'，未用于学习':'，下次预测已更新')+'</p><button id="segmentAgain" class="seg-primary">准备下一次行程</button>';$('segmentAgain').onclick=draw;toast('行程已保存')}
+  }
+  function tick(){if(active?.status==='recording'&&$('segmentElapsed')){$('segmentElapsed').textContent=clock(Date.now()-active.segmentStartedAt);$('tripElapsed').textContent='整趟已用 '+clock(Date.now()-active.startedAt)+' · 本段预计 '+active.plan[active.segments.length].predictedMinutes.toFixed(1)+' 分钟'}}
+  updateActive=()=>{$('startCommuteBtn').textContent=active?.schemaVersion===3?(active.status==='review'?'查看行程总结':'查看当前分段'):active?'结束旧版通勤':'选择路线并开始';tick()};
+  $('startCommuteBtn').onclick=()=>{if(active&&active.schemaVersion!==3){openRecord(true);return}draw();panel.scrollIntoView({behavior:'smooth',block:'start'})};
+  renderRecs=()=>{
+    const rr=recs();$('recommendationList').innerHTML=rr.map((r,i)=>'<article class="route-card '+(i===0?'recommended':'')+'"><h4>'+esc(r.name)+'</h4><div class="route-eta">'+r.pred.toFixed(1)+' min</div><p class="muted">'+esc(r.explain)+'</p><p class="muted">'+r.l.n+' / '+r.rows.length+' 段已有个人记录 · 分段预测相加</p><details><summary>查看分段预测</summary>'+rowsHTML(r.rows)+'</details><button class="seg-pick" data-select-route="'+r.id+'" '+(active?'disabled':'')+'>选择此路线</button></article>').join('');
+    if(rr[0]){$('arrivalTime').textContent=fmtTime(new Date(Date.now()+rr[0].pred*60000));$('arrivalRange').textContent='分段预测合计 · 初始值仍需实测校准'}
+  };
+  $('recommendationList').onclick=e=>{const b=e.target.closest('[data-select-route]');if(!b||active)return;selected=b.dataset.selectRoute;draw();panel.scrollIntoView({behavior:'smooth'})};
+  const oldSetDirection=setDirection;setDirection=(dir,manual=true)=>{if(active?.schemaVersion===3&&dir!==active.direction){if(manual)toast('记录中保持本次路线方向');return}oldSetDirection(dir,manual);draw()};
+  updateRecordRoutes=()=>{const d=$('recordDirection').value||currentDirection;$('recordRoute').innerHTML=ROUTES[d].filter(r=>(!r.legacyOnly||active?.routeId===r.id)&&(!r.custom||settings.custom1015)).map(r=>'<option value="'+r.id+'">'+esc(r.name)+'</option>').join('')};
+  let finishingLegacy=false;const oldOpenRecord=openRecord;openRecord=(useActive=false)=>{if(active?.schemaVersion===3){toast('请先完成当前分段行程');return}finishingLegacy=!!(useActive&&active);oldOpenRecord(useActive)};
+  $('manualRecordBtn').onclick=()=>openRecord(false);$('navRecord').onclick=()=>openRecord(false);$('recordDirection').onchange=updateRecordRoutes;
+  $('saveRecordBtn').onclick=()=>{const m=Number($('recordDuration').value);if(!Number.isFinite(m)||m<=0){toast('请填写实际耗时');return}const now=finishingLegacy?active.startedAt:Date.now(),dir=$('recordDirection').value,id=$('recordRoute').value,t={id:crypto.randomUUID(),timestamp:now,routeId:id,direction:dir,duration:m,note:$('recordNote').value.trim(),contextKey:contextKey(id,dir,new Date(now))};if(persist({...state,trips:[t,...trips],active:finishingLegacy?null:active})){$('recordDialog').close();renderAll();draw()}};
+  renderHistory=()=>{$('historyList').innerHTML=trips.length?trips.map(t=>'<article class="history-item"><h3>'+esc(t.routeName||routeById(t.routeId)?.short||t.routeId)+'</h3><p>'+fmtDate(new Date(t.timestamp))+' · '+t.duration.toFixed(1)+' 分</p><p>'+ (t.status==='cancelled'?'已中止 · 不用于学习':t.schemaVersion===3?(t.excludeLearning?'已保存 · 未用于学习':'已用于分段学习'):'旧版 / 手动总时长记录，无分段数据')+'</p>'+(t.segments?'<details><summary>各段实际时间</summary>'+rowsHTML(t.segments)+'</details>':'')+(t.note?'<p>'+esc(t.note)+'</p>':'')+'<button class="delete-btn" data-delete="'+esc(t.id)+'">删除这条记录</button></article>').join(''):'<p>还没有历史记录。</p>'};
+  $('historyList').onclick=e=>{const id=e.target.dataset.delete;if(!id)return;if(persist({...state,trips:trips.filter(t=>t.id!==id)})){rebuild();renderHistory();renderAll();if(!active)draw()}};
+  $('clearDataBtn').onclick=()=>{if(confirm('清除全部历史？当前行程和位置设置保留。')&&persist({...state,trips:[]})){rebuild();renderAll();if(!active)draw()}};
+  $('exportBtn').onclick=()=>{const blob=new Blob([JSON.stringify({version:3,exportedAt:new Date().toISOString(),settings,...state,stats},null,2)],{type:'application/json'}),u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download='commute-segments-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)};
+  renderLearning=()=>{const count=trips.filter(t=>t.schemaVersion===3&&t.status==='completed'&&!t.excludeLearning).length;$('tripCount').textContent=trips.length;$('bestLearnedRoute').textContent=Object.keys(stats.exact).length+' 个分段';$('learningSummary').textContent='已有 '+count+' 趟有效分段行程。旧版总时长、测试及中止记录保留在历史中，不用于分段预测。';};
+  const oldCustom=$('custom1015Toggle').onchange;$('custom1015Toggle').onchange=e=>{oldCustom(e);draw()};
+  window.addEventListener('storage',e=>{if(e.key!==KEY)return;const fresh=load(KEY,null);if(!fresh)return;state=fresh;trips=state.trips;active=state.active;rebuild();renderAll();draw()});
+  document.addEventListener('visibilitychange',tick);setInterval(tick,1000);
+  rebuild();if(active?.schemaVersion===3){currentDirection=active.direction;directionManuallySet=true}renderAll();updateRecordRoutes();draw();
+})();
